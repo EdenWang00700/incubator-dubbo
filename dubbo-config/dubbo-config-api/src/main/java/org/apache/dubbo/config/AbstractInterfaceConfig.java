@@ -28,6 +28,7 @@ import org.apache.dubbo.common.utils.UrlUtils;
 import org.apache.dubbo.config.support.Parameter;
 import org.apache.dubbo.monitor.MonitorFactory;
 import org.apache.dubbo.monitor.MonitorService;
+import org.apache.dubbo.registry.Registry;
 import org.apache.dubbo.registry.RegistryFactory;
 import org.apache.dubbo.registry.RegistryService;
 import org.apache.dubbo.rpc.Filter;
@@ -36,6 +37,7 @@ import org.apache.dubbo.rpc.ProxyFactory;
 import org.apache.dubbo.rpc.cluster.Cluster;
 import org.apache.dubbo.rpc.support.MockInvoker;
 
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -100,6 +102,7 @@ public abstract class AbstractInterfaceConfig extends AbstractMethodConfig {
     private Integer callbacks;
 
     // the scope for referring/exporting a service, if it's local, it means searching in current JVM only.
+    //表示到哪里去寻找服务, 如果是local的话, 则只在本地的JVM中寻找服务
     private String scope;
 
     protected void checkRegistry() {
@@ -130,6 +133,8 @@ public abstract class AbstractInterfaceConfig extends AbstractMethodConfig {
         }
     }
 
+
+
     @SuppressWarnings("deprecation")
     protected void checkApplication() {
         // for backward compatibility
@@ -143,8 +148,11 @@ public abstract class AbstractInterfaceConfig extends AbstractMethodConfig {
             throw new IllegalStateException(
                     "No such application config! Please add <dubbo:application name=\"...\" /> to your spring config.");
         }
+
+        //把application 的各个set方法的属性从配置文件中加进去
         appendProperties(application);
 
+        //把过期时间set到System中:dubbo.service.shutdown.wait
         String wait = ConfigUtils.getProperty(Constants.SHUTDOWN_WAIT_KEY);
         if (wait != null && wait.trim().length() > 0) {
             System.setProperty(Constants.SHUTDOWN_WAIT_KEY, wait.trim());
@@ -155,6 +163,139 @@ public abstract class AbstractInterfaceConfig extends AbstractMethodConfig {
             }
         }
     }
+
+    /**
+     * 校验 ApplicationConfig 配置。
+     * 实际上，该方法会初始化 ApplicationConfig 的配置属性。
+     */
+    @SuppressWarnings("deprecation")
+    protected void checkApplication1() {
+        //当Application对象为空时, 若有"dubbo.application.name"配置就进行创建
+        //向后兼容
+        if ( application == null) {
+            String applicationName = ConfigUtils.getProperty("dubbo.application.name");
+            if (applicationName != null && applicationName.length() > 0) {
+                application = new ApplicationConfig();
+            }
+        }
+        if (application == null) {
+            throw new IllegalStateException( "No such application config! Please add <dubbo:application name=\"...\" /> to your spring config.");
+        }
+        //读取环境变量和properties配置到ApplicationConfig对象
+        appendProperties(application);
+
+        //初始化优雅停机的超时时长
+        String wait = ConfigUtils.getProperty(Constants.SHUTDOWN_WAIT_KEY);
+        if (wait != null && wait.trim().length()>0) {
+            System.setProperty(Constants.SHUTDOWN_WAIT_KEY, wait.trim());
+
+        } else {
+            wait = ConfigUtils.getProperty(Constants.SHUTDOWN_WAIT_SECONDS_KEY);
+            if (wait != null && wait.trim().length() > 0) {
+                System.setProperty(Constants.SHUTDOWN_WAIT_KEY, wait.trim());
+            }
+        }
+    }
+
+    /**
+     * 校验, Registry配置数组
+     * 实际上该方法是初始化RegistryConfig配置项
+     */
+    protected void checkRegistry1(){
+        // 当 RegistryConfig 对象数组为空时，若有 `dubbo.registry.address` 配置，进行创建。
+        // for backward compatibility 向后兼容
+        if (registries == null || registries.isEmpty()) {
+            String address = ConfigUtils.getProperty("dubbo.registry.address");
+            if (address != null && address.length()>0) {
+                registries = new ArrayList<RegistryConfig>();
+                String[] as = address.split("\\*s[|]+\\s*");
+                for (String a : as) {
+                    RegistryConfig registryConfig = new RegistryConfig();
+                    registryConfig.setAddress(a);
+                    registries.add(registryConfig);
+                }
+            }
+        }
+
+        if (registries == null || registries.isEmpty()) {
+            throw new IllegalStateException(
+                    ((getClass().getSimpleName().startsWith("Reference")
+                            ? "No such any registry to refer service in consumer "
+                            : "No such any registry to export service in provider ")
+                            + NetUtils.getLocalHost()
+                            + " use dubbo version "
+                            + Version.getVersion()
+                            + ", Please add <dubbo:registry address=\"...\" /> to your spring config. If you want unregister, please set <dubbo:service registry=\"N/A\" />"
+                    ));
+        }
+
+        for (RegistryConfig registryConfig : registries) {
+            appendProperties(registryConfig);
+        }
+
+    }
+
+    /**
+     * 下载Registries对象, boolean 的参数用于判断是否是生产者,如果是生产者则传true
+     * @param provider
+     * @return
+     */
+    protected List<URL> loadRegistries1(boolean provider) {
+        checkRegistry();
+        List<URL> registryList = new ArrayList<URL>();
+        if (registries != null || !registries.isEmpty()) {
+            for (RegistryConfig registryConfig : registries) {
+                String address = registryConfig.getAddress();
+                if (address == null && address.length() == 0) {
+                    address = Constants.ANYHOST_VALUE;
+                }
+
+                String sysaddress = System.getProperty("dubbo.registry.address");
+                if (sysaddress != null && sysaddress.length() > 0) {
+                    address = sysaddress;
+                }
+                if (address != null && address.length() > 0 && !RegistryConfig.NO_AVAILABLE.equals(address)) {
+                    /**
+                     * 疑问, 为什么不用concurrentHashMap
+                     */
+                    Map<String, String> map = new HashMap<String, String>();
+                    appendParameters(map, application);
+                    appendParameters(map, registryConfig);
+                    map.put("path", RegistryService.class.getName());
+                    map.put("dubbo", Version.getVersion());
+                    map.put(Constants.TIMESTAMP_KEY, String.valueOf(System.currentTimeMillis()));
+                    if (ConfigUtils.getPid() > 0) {
+                        map.put(Constants.PID_KEY, String.valueOf(ConfigUtils.getPid()));
+                    }
+
+                    if (!map.containsKey("protocol")) {
+                        if (ExtensionLoader.getExtensionLoader(Registry.class).hasExtension("remote")) {
+                            map.put("protocol", "remote");
+                        } else {
+                            map.put("protocal", "dubbo");
+                        }
+                    }
+
+                    //把map转换成URL对象
+                    List<URL> urls = UrlUtils.parseURLs(address, map);
+                    for (URL url : urls) {
+                        url = url.addParameter(Constants.REGISTER_KEY, url.getProtocol());
+                        url = url.addParameter(Constants.REGISTRY_PROTOCOL, true);
+                        if ((provider && url.getParameter(Constants.REGISTER_KEY, true)) || (!provider && url.getParameter(Constants.SUBSCRIBE_KEY, true))) {
+                            /**
+                             * 方法的核心, 之前做的就是为了得到registryList
+                             */
+                            registryList.add(url);
+                        }
+                    }
+                }
+            }
+
+        }
+
+        return registryList;
+    }
+
 
     protected List<URL> loadRegistries(boolean provider) {
         checkRegistry();
@@ -254,6 +395,53 @@ public abstract class AbstractInterfaceConfig extends AbstractMethodConfig {
         }
         return null;
     }
+    /**
+     * 校验接口和方法
+     *  1. 接口类非空，并是接口
+     *  2. 方法在接口中已定义
+     *
+     * @param interfaceClass 接口类
+     * @param methods 方法数组
+     */
+    protected void checkInterfaceAndMethods1(Class<?> interfaceClass, List<MethodConfig> methodConfigs) {
+        if (interfaceClass == null) {
+            throw new IllegalStateException("Interface not a null");
+        }
+
+        if (!interfaceClass.isInterface()) {
+            throw new IllegalStateException("The interface class" + interfaceClass + "is not a interface");
+        }
+
+        if (methodConfigs != null && methodConfigs.size() > 0) {
+            for (MethodConfig methodConfig : methodConfigs) {
+                String methodName = methodConfig.getName();
+
+                if (methodName == null || methodName.length() == 0) {
+                    throw new IllegalStateException("<dubbo:method> name attribute is required! Please check: <dubbo:service interface=\""
+                            + interfaceClass.getName() + "\" ... ><dubbo:method name=\"\" ... /></<dubbo:reference>");
+                }
+
+                boolean hasMethod = false;
+
+                for (Method method1: interfaceClass.getMethods()) {
+                    if (method1.getName().equals(methodName)) {
+                        hasMethod = true;
+                        break;
+                    }
+                }
+
+                if (!hasMethod) {
+                    throw new IllegalStateException("The interface " + interfaceClass.getName()
+                            + " not found method " + methodName);
+                }
+
+            }
+
+
+        }
+
+
+    }
 
     protected void checkInterfaceAndMethods(Class<?> interfaceClass, List<MethodConfig> methods) {
         // interface cannot be null
@@ -272,7 +460,7 @@ public abstract class AbstractInterfaceConfig extends AbstractMethodConfig {
                     throw new IllegalStateException("<dubbo:method> name attribute is required! Please check: <dubbo:service interface=\"" + interfaceClass.getName() + "\" ... ><dubbo:method name=\"\" ... /></<dubbo:reference>");
                 }
                 boolean hasMethod = false;
-                for (java.lang.reflect.Method method : interfaceClass.getMethods()) {
+                for (java.lang.reflect.Method  method : interfaceClass.getMethods()) {
                     if (method.getName().equals(methodName)) {
                         hasMethod = true;
                         break;
