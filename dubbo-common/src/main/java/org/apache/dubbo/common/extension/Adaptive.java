@@ -26,7 +26,7 @@ import java.lang.annotation.Target;
 
 /**
  * Provide helpful information for {@link ExtensionLoader} to inject dependency extension instance.
- *
+ * 为扩展类加载器提供有用的信息到依赖的扩展实例
  * @see ExtensionLoader
  * @see URL
  */

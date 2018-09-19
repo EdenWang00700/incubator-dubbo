@@ -92,7 +92,8 @@ public abstract class AbstractConfig implements Serializable {
         return value;
     }
 
-    protected static void appendProperties(AbstractConfig config) {
+    protected static void
+    appendProperties(AbstractConfig config) {
         if (config == null) {
             return;
         }

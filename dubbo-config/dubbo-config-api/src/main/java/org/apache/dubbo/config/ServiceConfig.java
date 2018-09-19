@@ -16,15 +16,13 @@
  */
 package org.apache.dubbo.config;
 
+import com.sun.javafx.webkit.KeyCodeMap;
 import org.apache.dubbo.common.Constants;
 import org.apache.dubbo.common.URL;
 import org.apache.dubbo.common.Version;
 import org.apache.dubbo.common.bytecode.Wrapper;
 import org.apache.dubbo.common.extension.ExtensionLoader;
-import org.apache.dubbo.common.utils.ClassHelper;
-import org.apache.dubbo.common.utils.ConfigUtils;
-import org.apache.dubbo.common.utils.NamedThreadFactory;
-import org.apache.dubbo.common.utils.StringUtils;
+import org.apache.dubbo.common.utils.*;
 import org.apache.dubbo.config.annotation.Service;
 import org.apache.dubbo.config.invoker.DelegateProviderMetaDataInvoker;
 import org.apache.dubbo.config.model.ApplicationModel;
@@ -35,11 +33,14 @@ import org.apache.dubbo.rpc.Invoker;
 import org.apache.dubbo.rpc.Protocol;
 import org.apache.dubbo.rpc.ProxyFactory;
 import org.apache.dubbo.rpc.ServiceClassHolder;
+import org.apache.dubbo.rpc.cluster.Configurator;
 import org.apache.dubbo.rpc.cluster.ConfiguratorFactory;
 import org.apache.dubbo.rpc.service.GenericService;
 import org.apache.dubbo.rpc.support.ProtocolUtils;
 
 import javax.rmi.CORBA.Stub;
+import javax.swing.*;
+import java.io.IOException;
 import java.lang.reflect.Method;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -728,6 +729,7 @@ public class ServiceConfig<T> extends AbstractServiceConfig {
     }
 
 
+
     private void doExportUrlsFor1Protocol1(ProtocolConfig protocolConfig, List<URL> registryURLs) {
         String name = protocolConfig.getName();
 
@@ -894,6 +896,187 @@ public class ServiceConfig<T> extends AbstractServiceConfig {
                 exporters.add(exporter);
             }
         }
+        this.urls.add(url);
+
+    }
+
+    private void doExportUrlsForProtocol2(ProtocolConfig protocolConfig, List<URL> registryURLs) {
+        String name = protocolConfig.getName();
+        if (name == null || name.length() ==0) {
+            return;
+        }
+
+        Map<String, String> map = new HashMap<>();
+        map.put(Constants.SIDE_KEY, Constants.PROVIDER_SIDE);
+        map.put(Constants.DUBBO_VERSION_KEY, Version.getVersion() );
+        map.put(Constants.TIMESTAMP_KEY, String.valueOf(System.currentTimeMillis()));
+
+        if (ConfigUtils.getPid() > 0) {
+            map.put(Constants.PID_KEY, String.valueOf(ConfigUtils.getPid()) );
+        }
+
+        appendParameters(map, application );
+        appendParameters(map, module );
+        appendParameters(map, provider, Constants.DEFAULT_KEY);
+        appendParameters(map, protocolConfig);
+        appendParameters(map, this);
+
+        //从配置文件中得到methodConfig
+        if (methods != null && !methods.isEmpty()) {
+            for (MethodConfig method : methods) {
+
+                //把配置中的方法名称放到map中
+                appendParameters(map, method, method.getName());
+                String retryKey = method.getName() + ".retry";
+                if (map.containsKey(retryKey)) {
+                    String retryValue = map.remove(retryKey);
+                    if ("false".equals(retryValue)) {
+                        map.put(method.getName() + ".retries" , "0");
+                    }
+                }
+                //从配置文件中得到ArgumentConfig
+                List<ArgumentConfig> argumentConfigs = method.getArguments();
+                if (argumentConfigs != null && !argumentConfigs.isEmpty()) {
+                    for (ArgumentConfig argumentConfig : argumentConfigs) {
+                        if (argumentConfig.getType() != null || argumentConfig.getType().length()>0 ) {
+                            //把config中的Argument和method与interfaceClass中的配对, interface是一个类, 相当于methodConfig是这个类的实现
+                            Method[] methods = interfaceClass.getMethods();
+                            if (methods != null && methods.length > 0) {
+                                for (int i = 0; i < methods.length; i++) {
+                                    String methodName = methods[i].getName();
+                                    //匹配上方法
+                                    if (methodName.equals(method.getName())) {
+                                        Class<?>[] argTypes = methods[i].getParameterTypes();
+
+                                        //匹配指定了位置的参数
+                                        if (argumentConfig.getIndex() != -1) {
+                                            if (argTypes[argumentConfig.getIndex()].getName().equals(argumentConfig.getType())) {
+                                                //把配置中的参数方法map中
+                                                appendParameters(map, argumentConfig, method.getName() + "." + argumentConfig.getType());
+                                            } else {
+                                                throw new IllegalArgumentException("argument config error : the index attribute and type attribute not match :index :"
+                                                        + argumentConfig.getIndex() + ", type:" + argumentConfig.getType());
+
+                                            }
+                                            //没有指定位置的参数
+                                        } else {
+                                            for (int j = 0; j < argTypes.length ; j++) {
+                                                Class<?> argClass = argTypes[j];
+                                                if (argClass.getName().equals(argumentConfig.getType())) {
+                                                    appendParameters(map, argumentConfig, method.getName() + "." + j );
+                                                    if (argumentConfig.getIndex() != -1 && argumentConfig.getIndex() != j) {
+                                                        throw new IllegalArgumentException("argument config error : the index attribute and type attribute not match :index :"
+                                                                + argumentConfig.getIndex() + ", type:" + argumentConfig.getType());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            //没有指定参数类型只是指定了位置
+                        } else if ( argumentConfig.getIndex() != -1) {
+                            appendParameters(map, argumentConfig, method.getName() + "." + argumentConfig.getIndex() );
+                        } else {
+                            throw new IllegalArgumentException("argument config must set index or type attribute.eg: " +
+                                    "<dubbo:argument index='0' .../> or <dubbo:argument type=xxx .../>");
+                        }
+                    }
+                }
+            }
+        }
+
+        //generic revision, methods
+        if (ProtocolUtils.isGeneric(generic)) {
+            map.put("generic", generic);
+            map.put("methods", Constants.ANY_VALUE);
+        } else {
+            String revision = Version.getVersion(interfaceClass, version);
+            if (revision != null && revision.length()>0) {
+                map.put("revision", revision);
+            }
+            //获得interface的所有方法
+            String[] methods = Wrapper.getWrapper(interfaceClass).getMethodNames();
+            if (methods.length == 0) {
+                logger.warn("NO method found in service interface " + interfaceClass.getName());
+                map.put("methods", Constants.ANY_VALUE);
+            } else {
+                //获得接口对象的全部方法
+                map.put("methods", StringUtils.join(new HashSet<String>(Arrays.asList(methods)), ",")) ;
+            }
+        }
+
+        //令牌校验
+        if (!ConfigUtils.isEmpty(token)) {
+            if (ConfigUtils.isDefault(token)) {
+                map.put("token", UUID.randomUUID().toString());
+            } else {
+                map.put("token", token );
+            }
+        }
+
+        //协议为injvm时不注册, 不通知
+        if ("injvm".equals(protocolConfig.getName())) {
+            protocolConfig.setRegister(false);
+            map.put("notify", "false" );
+        }
+
+        //export service
+        String contextPath = protocolConfig.getContextpath();
+        if ((contextPath == null || contextPath.length() == 0) && provider != null)  {
+            contextPath = provider.getContextpath();
+        }
+
+        //host port
+        String host = this.findConfigedHosts(protocolConfig, registryURLs, map);
+        Integer port = this.findConfigedPorts(protocolConfig, name, map);
+
+        URL url = new URL(name, host, port, (contextPath == null || contextPath.length() == 0 ? "" : contextPath + "/") + path, map);
+
+        if (ExtensionLoader.getExtensionLoader(ConfiguratorFactory.class).hasExtension(url.getProtocol())) {
+            url = ExtensionLoader.getExtensionLoader(ConfiguratorFactory.class)
+                    .getExtension(url.getProtocol()).getConfigurator(url).configure(url);
+        }
+
+        String scope = url.getParameter(Constants.SCOPE_KEY);
+        if (!Constants.SCOPE_NONE.toString().equalsIgnoreCase(scope.toString())) {
+            if (!Constants.SCOPE_REMOTE.toString().equalsIgnoreCase(scope)) {
+                exportLocal(url);
+            }
+
+            if (!Constants.SCOPE_LOCAL.toString().equalsIgnoreCase(scope)) {
+                if (logger.isInfoEnabled()) {
+                    logger.info("Export dubbo service " + interfaceClass.getName() + " to url " + url);
+                }
+
+                if (registryURLs != null && !registryURLs.isEmpty()) {
+                    for (URL registryUrl : registryURLs) {
+                        url = url.addParameterIfAbsent("dynamic", registryUrl.getParameter("dynamic"));
+                        URL monitorUrl = loadMonitor(registryUrl);
+                        if (monitorUrl != null) {
+                            url = url.addParameterAndEncoded(Constants.MONITOR_KEY, monitorUrl.toFullString());
+                        }
+                        if (logger.isInfoEnabled()) {
+                            logger.info("Register dubbo service " + interfaceClass.getName() + " url " + url + " to registry " + registryUrl);
+
+                        }
+
+                        Invoker<?> invoker = proxyFactory.getInvoker(ref, (Class) interfaceClass, url);
+                        DelegateProviderMetaDataInvoker wrapperInvoker = new DelegateProviderMetaDataInvoker(invoker, this);
+
+                        Exporter<?> exporter = protocol.export(wrapperInvoker);
+                        exporters.add(exporter);
+                    }
+
+                } else {
+                    Invoker<?> invoker = proxyFactory.getInvoker(ref, (Class) interfaceClass, url);
+                    DelegateProviderMetaDataInvoker wrapperInvoker = new DelegateProviderMetaDataInvoker(invoker, this);
+
+                    Exporter<?> exporter = protocol.export(wrapperInvoker);
+                }
+            }
+        }
+
         this.urls.add(url);
 
     }
@@ -1163,6 +1346,79 @@ public class ServiceConfig<T> extends AbstractServiceConfig {
         return hostToRegistry;
     }
 
+    private String findConfigHosts(ProtocolConfig protocolConfig, List<URL> registryURls, Map<String, String> map) {
+        boolean anyhost = false;
+// 第一优先级，从环境变量，获得绑定的 Host 。可强制指定，参见仓库 https://github.com/dubbo/dubbo-docker-sample
+        String hostToBind = getValueFromConfig(protocolConfig, Constants.DUBBO_IP_TO_BIND);
+        if (hostToBind != null && hostToBind.length() > 0 && isInvalidLocalHost(hostToBind)) {
+            throw new IllegalArgumentException("Specified invalid bind ip from property:" + Constants.DUBBO_IP_TO_BIND + ", value:" + hostToBind);
+        }
+
+        if (hostToBind == null || hostToBind.length() == 0) {
+            // 第二优先级，从 ProtocolConfig 获得 Host 。
+            hostToBind = protocolConfig.getHost();
+            if (provider != null && (hostToBind == null || hostToBind.length() == 0)) {
+                hostToBind = provider.getHost();
+            }
+// 第三优先级，若非合法的本地 Host ，使用 InetAddress.getLocalHost().getHostAddress() 获得 Host
+            if (isInvalidLocalHost(hostToBind)) {
+                anyhost = true;
+
+                try {
+
+                    hostToBind = InetAddress.getLocalHost().getHostAddress();
+                } catch (UnknownHostException e) {
+                    logger.warn(e.getMessage(), e);
+                }
+
+                // 第四优先级，若是非法的本地 Host ，通过使用 `registryURLs` 启动 Server ，并本地连接，获得 Host 。
+                if (isInvalidLocalHost(hostToBind)) {
+                    if (registryURls != null && !registryURls.isEmpty()) {
+                        for (URL registryUrl : registryURls) {
+                            try {
+                                Socket socket = new Socket();
+                                try {
+                                    SocketAddress address = new InetSocketAddress(registryUrl.getHost(), registryUrl.getPort());
+                                    socket.connect(address, 1000);
+                                    hostToBind = socket.getLocalAddress().getHostAddress();
+                                } finally {
+                                    try {
+                                        socket.close();
+                                    } catch (Throwable e) {
+                                    }
+                                }
+                            } catch (Exception e) {
+                                logger.warn(e.getMessage(), e);
+                            }
+                        }
+                    }
+                }
+                // 第五优先级，若是非法的本地 Host ，获得本地网卡，第一个合法的 IP 。
+                if (isInvalidLocalHost(hostToBind)) {
+                    hostToBind = getLocalHost();
+                }
+            }
+        }
+
+        map.put(Constants.ANYHOST_KEY, String.valueOf(hostToBind));
+        // 获得 `hostToRegistry` ，默认使用 `hostToBind` 。可强制指定，参见仓库 https://github.com/dubbo/dubbo-docker-sample
+        String hostToRegistry = getValueFromConfig(protocolConfig, Constants.DUBBO_IP_TO_REGISTRY);
+        if (hostToRegistry != null && hostToRegistry.length() > 0 && isInvalidLocalHost(hostToBind)) {
+            throw new IllegalArgumentException("Specified invalid registry ip from property:"
+                    + Constants.DUBBO_IP_TO_REGISTRY + ", value:" + hostToRegistry);
+
+        } else if (hostToRegistry == null || hostToRegistry.length() == 0) {
+            hostToRegistry = hostToBind;
+        }
+
+        map.put(Constants.ANYHOST_KEY, String.valueOf(anyhost));
+
+        return hostToRegistry;
+    }
+
+
+
+
     /**
      * Register port and bind port for the provider, can be configured separately
      * Configuration priority: environment variable -> java system properties -> port property in protocol config file
@@ -1211,6 +1467,49 @@ public class ServiceConfig<T> extends AbstractServiceConfig {
 
         return portToRegistry;
     }
+
+    private Integer findConfigedPorts1(ProtocolConfig protocolConfig, String name, Map<String, String> map) {
+        String port = getValueFromConfig(protocolConfig, Constants.DUBBO_IP_TO_BIND);
+
+        Integer portToBind = parsePort(port);
+
+        if (portToBind == null) {
+            portToBind = protocolConfig.getPort();
+
+            if (provider != null && (portToBind == null || portToBind == 0)) {
+                portToBind = provider.getPort();
+            }
+
+            final int defaultPort = ExtensionLoader.getExtensionLoader(Protocol.class).getExtension(name).getDefaultPort();
+
+            if (portToBind == null || portToBind == 0) {
+                portToBind = defaultPort;
+            }
+
+            if (portToBind <= 0) {
+                portToBind = getRandomPort(name);
+
+                if (portToBind == null || portToBind == 0) {
+                    portToBind = getAvailablePort(defaultPort);
+
+                    putRandomPort(name,portToBind );
+                }
+                logger.warn("Use random available port(" + portToBind + ") for protocol " + name);
+            }
+        }
+
+        map.put(Constants.BIND_PORT_KEY, String.valueOf(portToBind));
+
+        String portToRegistryStr = getValueFromConfig(protocolConfig, Constants.DUBBO_PORT_TO_BIND);
+        Integer portToRegistry = parsePort(portToRegistryStr);
+
+        if (portToRegistry == null) {
+            portToRegistry = portToBind;
+        }
+
+        return portToRegistry;
+    }
+
 
     private Integer parsePort(String configPort) {
         Integer port = null;

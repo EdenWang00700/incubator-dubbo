@@ -46,6 +46,7 @@ public interface Serialization {
 
     /**
      * create serializer
+     * 将输出流对象序列化为输出对象
      *
      * @param url
      * @param output
@@ -57,7 +58,7 @@ public interface Serialization {
 
     /**
      * create deserializer
-     *
+     * 将序列化的输入流反序列化为输入对象, 通过这种方式init
      * @param url
      * @param input
      * @return deserializer

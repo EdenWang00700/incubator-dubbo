@@ -18,7 +18,9 @@ package org.apache.dubbo.common.bytecode;
 
 import org.apache.dubbo.common.utils.ClassHelper;
 import org.apache.dubbo.common.utils.ReflectUtils;
+import sun.security.util.Length;
 
+import javax.sound.midi.Track;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -108,6 +110,195 @@ public abstract class Wrapper {
             WRAPPER_MAP.put(c, ret);
         }
         return ret;
+    }
+
+    private static Wrapper makeWrapper1(Class<?> c) throws IllegalAccessException {
+        if (c.isPrimitive()) {
+            throw new IllegalArgumentException("Can not create wrapper for primitive type: " + c);
+        }
+
+        String name = c.getName();
+
+        ClassLoader classLoader = ClassHelper.getClassLoader(c);
+
+        StringBuilder c1 = new StringBuilder("public void setPropertyValue(Object o, String n, Object v){");
+        StringBuilder c2 = new StringBuilder("public Object getPropertyValue(Object o, String n){");
+        StringBuilder c3 = new StringBuilder("public Object invokeMethod(Object o, String n, Class[] p, Object[] v) throws"
+                + InvocationTargetException.class.getName() + "{");
+        // name w ; 在定义变量
+        c1.append(name).append(" w; try{ w = ((").append(name).append(")$1); }catch(Throwable e){ throw new IllegalArgumentException(e); }");
+        c2.append(name).append(" w; try{ w = ((").append(name).append(")$1); } catch (Throwable e){ throw new IllegalArgumentException(e);}");
+        c3.append(name).append(" w; try{ w = ((").append(name).append(")$1); } catch (Throwable e) { throw new IllegalArgumentException(e);}");
+
+        //Map<properyName, propertyType>
+        Map<String, Class<?>> propertyTypes = new HashMap<>();
+        //Map<methodName, method>
+        Map<String, Method> methodMaps = new LinkedHashMap<>();
+
+        List<String> methodNames = new ArrayList<>();
+        List<String> declaringMethodNames = new ArrayList<>();
+
+        //获得c的全部属性
+        for (Field f: c.getFields()) {
+           String fieldName = f.getName();
+           Class<?> fieldType = f.getType();
+            if (Modifier.isStatic(f.getModifiers()) || Modifier.isTransient(f.getModifiers())) {
+                continue;
+            }
+
+            c1.append(" if( $2.equals(\"").append(fieldName).append("\")) { w.")
+                    .append(fieldName)
+                    .append("=")
+                    .append(arg(fieldType, "$3"))
+                    .append("; return ;}");
+            c2.append(" if( $2.equals(\"").append(fieldName).append("\")) { return ($w)w.")
+                    .append(fieldName)
+                    .append("; }");
+            propertyTypes.put(fieldName, fieldType );
+        }
+
+        Method[] methods = c.getMethods();
+
+        boolean hasMethod = hasMethods(methods);
+        if (hasMethod) {
+            c3.append("try {");
+        }
+
+        for (Method method : methods) {
+            if (method.getDeclaringClass() == Object.class) {
+                continue;
+            }
+
+            String methodName = method.getName();
+            c3.append("if (\"").append(methodName).append("\").equals($2)");
+            int length = method.getParameterTypes().length;
+
+            c3.append("&&").append("$3.lenth == ").append(length);
+
+            boolean override = false;
+
+            for (Method method2 : methods ) {
+                if (method != method && method.getName().equals(method2.getName()) ) {
+                    override = true;
+                    break;
+                }
+            }
+
+            if (override) {
+                if (length > 0) {
+                    for (int l = 0; l < length; l++) {
+                        c3.append("&&").append("$3[").append(l).append("].getName.equals(\"").append(method.getParameterTypes()[1].getName()).append("\")");
+                    }
+                }
+
+            }
+
+            c3.append(") {");
+
+            if (method.getReturnType() == Void.TYPE) {
+                c3.append("w.").append(methodName).append(args(method.getParameterTypes(),"$4" )).append("0;").append("return null");
+            } else {
+                c3.append("return ($w)w.").append(methodName).append('(').append(args(method.getParameterTypes(),"$4" )).append(");");
+            }
+
+            c3.append("}");
+            methodNames.add(methodName);
+
+            if (method.getDeclaringClass() == c) {
+                declaringMethodNames.add(methodName);
+            }
+
+        }
+
+        if (hasMethod) {
+            c3.append("} catch(Throw e) {");
+            c3.append("   throw new java.lang.reflect.InvocationException(e); ");
+            c3.append("}");
+        }
+
+        c3.append("throw new " + NoSuchMethodException.class.getName() + "(\" Not found method \\\"\" + $2 + \" \\\" " +
+                "in class"  + c.getName() + ".\"); }");
+
+        Matcher matcher;
+
+        for (Map.Entry<String, Method> entry : methodMaps.entrySet() ) {
+            String methodName = entry.getKey();
+            Method method = (Method) entry.getValue();
+
+            if ((matcher = ReflectUtils.GETTER_METHOD_DESC_PATTERN.matcher(methodName)).matches()) {
+                String propertyName = propertyName(matcher.group());
+                c2.append(" if ( $2.equals(\"").append(propertyName).append("\") ) { return ($w)w").append(method.getName()).append("();}");
+                propertyTypes.put(propertyName, method.getReturnType());
+            } else if ((matcher = ReflectUtils.IS_HAS_CAN_METHOD_DESC_PATTERN.matcher(methodName)).matches()) {
+                String propertyName = propertyName(matcher.group(1));
+                c2.append(" if( $2.equals(\"").append(propertyName).append("\")) {return ($w)w.").append(method.getName()).append("();}");
+            } else if ((matcher = ReflectUtils.SETTER_METHOD_DESC_PATTERN.matcher(methodName)).matches()) {
+                Class<?> protertyType = method.getParameterTypes()[0];
+                String propertyName = propertyName(matcher.group(1));
+                c1.append(" if( $2.equals(\")").append(propertyName).append("\") ){ w.")
+                        .append("(").append(arg(protertyType, "$3")).append("); return; }");
+                propertyTypes.put(propertyName, protertyType);
+            }
+        }
+        c1.append("throw new " + NoSuchPropertyException.class.getName() + "(\" Not found property \\\"\" + $2 + \"\\\"  " +
+                "filed or setter method in class" + c.getName() + ".\");}");
+        c2.append("throw new " + NoSuchPropertyException.class.getName() + "(\" Not found property \\\"\" + $2 + \"\\\"  " +
+                "filed or setter method in class" + c.getName() + ".\");}");
+
+
+        //mack class
+        long id = WRAPPER_CLASS_COUNTER.getAndIncrement();
+
+        ClassGenerator classGenerator = ClassGenerator.newInstance(classLoader);
+
+        classGenerator.setClassName( (Modifier.isPublic(c.getModifiers()) ? Wrapper.class.getName() : c.getName() + "$sw" ) + id);
+
+        classGenerator.setSuperClass(Wrapper.class);
+
+        classGenerator.addDefaultConstructor();
+        classGenerator.addField("public static String[] pns;");// propterty name array
+        classGenerator.addField("public static Map.class.getName + pts"); //property type array
+        classGenerator.addField("public static String[] mns;") ; //all method name array
+        classGenerator.addField("public static String dmns;"); // declear method name array
+
+        for (int i = 0, length = methodMaps.size(); i < length; i++) {
+            classGenerator.addField("public static Class[] mts" + i + ";");
+        }
+
+        classGenerator.addMethod("public String[] getPropertyNames(){return pns}");
+        classGenerator.addMethod("public boolean hasProperty(String n) {return pts.containsKey($1)}");
+        classGenerator.addMethod("public Class getPropertyType(String n) { return (Class)pts.get($1);}");
+        classGenerator.addMethod("public String getMethodNames() return mns");
+        classGenerator.addMethod("public String getDeclearMethodNames(){return dmns}");
+        classGenerator.addMethod(c1.toString());
+        classGenerator.addMethod(c2.toString());
+        classGenerator.addMethod(c3.toString());
+
+        try {
+            Class<?> wrapperClass = classGenerator.toClass();
+
+            wrapperClass.getField("pts").set(null, propertyTypes);
+            wrapperClass.getField("pns").set(null, propertyTypes.keySet().toArray( new String[0]));
+            wrapperClass.getField("mns").set(null, methodNames.toArray(new String[0]));
+            wrapperClass.getField("dmns").set(null, declaringMethodNames.toArray());
+            int ix = 0;
+            for (Method m : methodMaps.values()) {
+                wrapperClass.getField("mts" + ix++).set(null, m.getParameterTypes());
+            }
+
+            return (Wrapper)wrapperClass.newInstance();
+
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Throwable e) {
+            throw new RuntimeException();
+        } finally {
+            classGenerator.release();
+            methodMaps.clear();
+            methodNames.clear();
+            declaringMethodNames.clear();
+        }
+
     }
 
     private static Wrapper makeWrapper(Class<?> c) {

@@ -44,7 +44,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.regex.Pattern;
 
 /**
- * Load dubbo extensions
+ * Load dubbo extensions, 要区分扩展名和扩展点两个概念, 扩展点是指被扩展的点, 扩展名是指该扩展方式的名字, 比如说dubbo就是一个扩展名, 表示通过dubbo的方式扩展
  * <ul>
  * <li>auto inject dependency extension </li>
  * <li>auto wrap extension in wrapper </li>
@@ -64,33 +64,126 @@ public class ExtensionLoader<T> {
 
     private static final String DUBBO_DIRECTORY = "META-INF/dubbo/";
 
+    /**
+     * 扩展名(比如dubbo, injvm都是扩展名)与@Activate的映射(@Activate 注解用于有多个扩展点的实现时根据不同条件指定实例化哪一个实现 This annotation is useful for automatically activate certain extensions with the given criteria,
+     * * for examples: <code>@Activate</code> can be used to load certain <code>Filter</code> extension when there are
+     * * multiple implementations.)
+     * 扩展名(扩展点的实现类的名字为key), value是实现类所对应的实例对象
+     * 例如: AccessLogFilter
+     * <p>
+     * 用于{@link #getActivateExtension(URL, String)} (获取激活的扩展点)
+     */
+    private final Map<String, Object> cachedActivates = new ConcurrentHashMap<String, Object>();
     private static final String DUBBO_INTERNAL_DIRECTORY = DUBBO_DIRECTORY + "internal/";
 
     private static final Pattern NAME_SEPARATOR = Pattern.compile("\\s*[,]+\\s*");
 
+    /**
+     * 扩展加载器集合, <扩展点类, 扩展点加载器>, 之所以是final static 的ConcurrentMap就是因为这是要所有的对象共用的
+     */
     private static final ConcurrentMap<Class<?>, ExtensionLoader<?>> EXTENSION_LOADERS = new ConcurrentHashMap<Class<?>, ExtensionLoader<?>>();
 
+    /**
+     * 扩展实现类集合, 这个类的key对应的是扩展点实现类, value对应这个实现类的实例化对象
+     * <p>
+     * key: 扩展点实现类
+     * value: 扩展对象
+     * <p>
+     * 例如: key为Class<AccessLogFilter>
+     * value为AccessLogFilter的实例对象
+     */
     private static final ConcurrentMap<Class<?>, Object> EXTENSION_INSTANCES = new ConcurrentHashMap<Class<?>, Object>();
 
     // ==============================
 
+    /**
+     * 扩展点所扩展的接口, 例如Protocol, Filter都是要扩展的接口
+     */
     private final Class<?> type;
 
+    /**
+     * 扩展点的对象工厂
+     * 用于调用{@link #injectExtension(Object)}方法, 向扩展对象注入依赖属性(注入依赖指给扩展点的对象中的各个属性赋值)
+     * 比如, {@link StubProxyFactoryWrapper}中有 Protocol protocol属性
+     */
     private final ExtensionFactory objectFactory;
 
+    /**
+     * 缓存扩展名和扩展类的映射 ===> <扩展名的具体实现, 扩展名>
+     * 如: key: spi , value:class com.alibaba.dubbo.common.extension.factory.SpiExtensionFactory
+     * 和{@link #cachedClasses}的K V对调
+     * 通鞥{@link #loadExtensionClasses()} 加载
+     */
     private final ConcurrentMap<Class<?>, String> cachedNames = new ConcurrentHashMap<Class<?>, String>();
 
+    /**
+     * 缓存的扩展实现类集合 ===> <扩展点名字(还是扩展名?), 扩展实现类> ==> 如果一个扩展点有多个实现, 那么怎么在这个里面存?
+     * 不包含以下两种类型:
+     * 1.自适应扩展实现类, 例如AdaptiveExtensionFactory, 自适应扩展点就是加了@Activate的注解的扩展点
+     * 2. 带唯一参数为扩展接口的构造方法实现类(也就是说在构造器中只有一个属性), 或者说扩展wrapper实现类(因为wrapper的主要作用就是封装, 所以常常是对某个单一对象的封装). 例如: ProtocolFilterWrapper
+     * <p>
+     * 扩展Wrapper实现类会添加到{@link #cachedWrapperClasses}中
+     * <p>
+     * 没有理解为什么要加一个Holder的封装
+     */
     private final Holder<Map<String, Class<?>>> cachedClasses = new Holder<Map<String, Class<?>>>();
 
-    private final Map<String, Object> cachedActivates = new ConcurrentHashMap<String, Object>();
+
+    /**
+     * 缓存扩展对象集合
+     * <p>
+     * key: 扩展名
+     * value: 扩展对象的集合, 这个扩展对象该扩展名下符合条件的所有的扩展实例对象
+     * <p>
+     * 例如, Protocol扩展
+     * key: dubbo, value:DubboProtocol
+     * key: injvm, value: InjvmProtocol
+     * <p>
+     * 通过{@link #loadExtensionClasses()}加载
+     */
     private final ConcurrentMap<String, Holder<Object>> cachedInstances = new ConcurrentHashMap<String, Holder<Object>>();
+
+    /**
+     * 缓存自适应(Adaptive)的扩展对象通过@Adaptive注解的方法获得的对象
+     */
     private final Holder<Object> cachedAdaptiveInstance = new Holder<Object>();
+
+    /**
+     * 缓存自适应扩展对象的类
+     * {@link #getAdaptiveExtensionClass()}
+     */
     private volatile Class<?> cachedAdaptiveClass = null;
+
+    /**
+     * 缓存默认扩展名
+     * <p>
+     * 通过{@link SPI (Marker for extension interface)}注解获取
+     */
     private String cachedDefaultName;
+
+    /**
+     * 创建 {@link #cachedAdaptiveInstance}是发生的异常
+     * 异常发生后不再创建, 参见{@link #createAdaptiveExtension()}
+     */
     private volatile Throwable createAdaptiveInstanceError;
 
+    /**
+     * 扩展Wrapper实现类集合
+     * <p>
+     * 带唯一参数为扩展接口的构造方法的实现类
+     * <p>
+     * 通过{@link #loadExtensionClasses()}加载
+     */
     private Set<Class<?>> cachedWrapperClasses;
 
+    /**
+     * 扩展名 与 加载对应扩展类发生的异常的映射
+     * <p>
+     * key: 扩展名(dubbo, injvm等)
+     * value:异常的类
+     * <p>
+     * 在{@link #loadFile(Map, String)}时记录
+     */
     private Map<String, IllegalStateException> exceptions = new ConcurrentHashMap<String, IllegalStateException>();
 
     private ExtensionLoader(Class<?> type) {
@@ -121,6 +214,7 @@ public class ExtensionLoader<T> {
         }
         return loader;
     }
+
 
     private static ClassLoader findClassLoader() {
         return ExtensionLoader.class.getClassLoader();
@@ -572,6 +666,28 @@ public class ExtensionLoader<T> {
         return classes;
     }
 
+    /**
+     * 获得扩展实现类数组
+     * @return
+     */
+    private Map<String, Class<?>> getExtensionClassse() {
+        //从缓存中,获得扩展实现类数组
+        Map<String, Class<?>> classes = cachedClasses.get();
+        if (classes == null) {
+            synchronized (cachedClasses) {
+                classes = cachedClasses.get();
+                if (classes == null) {
+
+                    //从配置文件中加载扩展实现类数组
+                    classes = loadExtensionClasses();
+                    //设置到缓存中
+                    cachedClasses.set(classes);
+                }
+            }
+        }
+    }
+
+
     // synchronized in getExtensionClasses
     private Map<String, Class<?>> loadExtensionClasses() {
         final SPI defaultAnnotation = type.getAnnotation(SPI.class);
@@ -596,6 +712,7 @@ public class ExtensionLoader<T> {
         loadDirectory(extensionClasses, SERVICES_DIRECTORY, type.getName().replace("org.apache", "com.alibaba"));
         return extensionClasses;
     }
+
 
     private void loadDirectory(Map<String, Class<?>> extensionClasses, String dir, String type) {
         String fileName = dir + type;

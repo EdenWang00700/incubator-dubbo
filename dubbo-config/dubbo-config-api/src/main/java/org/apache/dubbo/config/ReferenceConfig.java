@@ -16,12 +16,14 @@
  */
 package org.apache.dubbo.config;
 
+import com.sun.xml.internal.ws.policy.privateutil.PolicyUtils;
 import org.apache.dubbo.common.Constants;
 import org.apache.dubbo.common.URL;
 import org.apache.dubbo.common.Version;
 import org.apache.dubbo.common.bytecode.Wrapper;
 import org.apache.dubbo.common.config.AsyncFor;
 import org.apache.dubbo.common.extension.ExtensionLoader;
+import org.apache.dubbo.common.status.support.MemoryStatusChecker;
 import org.apache.dubbo.common.utils.ConfigUtils;
 import org.apache.dubbo.common.utils.NetUtils;
 import org.apache.dubbo.common.utils.ReflectUtils;
@@ -45,6 +47,7 @@ import org.apache.dubbo.rpc.support.ProtocolUtils;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.lang.reflect.Member;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -195,6 +198,206 @@ public class ReferenceConfig<T> extends AbstractReferenceConfig {
         invoker = null;
         ref = null;
     }
+
+    private void init2() {
+        if (initialized) {
+            return;
+        }
+
+        initialized = true;
+
+        if (interfaceName == null || interfaceName.length() == 0) {
+            throw new IllegalStateException("<dubbo:reference interface=\"\" /> interface not allow null!");
+        }
+
+        checkDefault();
+
+        appendProperties(this);
+
+        if (getGeneric() == null || getConsumer() != null) {
+            setGeneric(getConsumer().getGeneric());
+        }
+
+        if (ProtocolUtils.isGeneric(getGeneric())) {
+            interfaceClass = GenericService.class;
+        } else {
+            try {
+                interfaceClass = Class.forName(interfaceName, true, Thread.currentThread().getContextClassLoader()
+                );
+            } catch (ClassNotFoundException e) {
+                throw new IllegalStateException(e.getMessage(), e);
+            }
+
+            checkInterfaceAndMethods(interfaceClass, methods);
+        }
+        String resolve = System.getProperty(interfaceName);
+        String resolveFile = null;
+
+        if (resolve == null || resolve.length() == 0) {
+            resolveFile = System.getProperty("dubbo.resolve.file");
+            if (resolveFile == null || resolveFile.length() == 0) {
+                File userResolveFile = new File(new File(System.getProperty("user.home")), "dubbo-resolve.properties");
+                if (userResolveFile.exists()) {
+                    resolveFile = userResolveFile.getAbsolutePath();
+                }
+            }
+            if (resolveFile != null && resolveFile.length() > 0) {
+                Properties properties = System.getProperties();
+                FileInputStream fileInputStream = null;
+                try {
+                    fileInputStream = new FileInputStream(new File(resolveFile));
+                } catch (IOException e) {
+                    throw new IllegalStateException("Unload " + resolveFile + ", cause:" + e.getMessage(), e);
+                } finally {
+                    try {
+                        if (fileInputStream != null) {
+                            fileInputStream.close();
+                        }
+                    } catch (IOException e) {
+                        logger.warn(e.getMessage(), e);
+                    }
+                }
+                resolve = properties.getProperty(interfaceName);
+            }
+        }
+
+        if (resolve != null && resolve.length() > 0) {
+            url = resolve;
+
+            if (logger.isWarnEnabled()) {
+                if (resolveFile != null && resolveFile.length() > 0) {
+                    logger.warn("Using default dubbo resolve file " + resolveFile
+                            + " replace " + interfaceName + "" + resolve + " to p2p invoke remote service.");
+                } else {
+                    logger.warn("Using -D" + interfaceName + "=" + resolve + " to p2p invoke remote service.");
+                }
+            }
+        }
+
+        if (consumer != null) {
+            if (application == null) {
+                application = consumer.getApplication();
+            }
+            if (module == null) {
+                module = consumer.getModule();
+            }
+            if (registries == null) {
+                registries = consumer.getRegistries();
+            }
+            if (monitor == null) {
+                monitor = consumer.getMonitor();
+            }
+        }
+
+        // 从 ModuleConfig 对象中，读取 registries、monitor 配置对象。
+        if (module != null) {
+            if (registries == null) {
+                registries = module.getRegistries();
+            }
+            if (monitor == null) {
+                monitor = module.getMonitor();
+            }
+        }
+        // 从 ApplicationConfig 对象中，读取 registries、monitor 配置对象。
+        if (application != null) {
+            if (registries == null) {
+                registries = application.getRegistries();
+            }
+            if (monitor == null) {
+                monitor = application.getMonitor();
+            }
+        }
+
+        checkApplication();
+
+        checkStubAndMock(interfaceClass);
+
+        Map<String, String> map = new HashMap<>();
+        Map<Object, Object> attributes = new HashMap<>();
+
+        map.put(Constants.SIDE_KEY, Constants.CONSUMER_SIDE);
+        map.put(Constants.DUBBO_VERSION_KEY, Version.getVersion());
+        map.put(Constants.TIMESTAMP_KEY, String.valueOf(System.currentTimeMillis()));
+        if (ConfigUtils.getPid() > 0) {
+            map.put(Constants.PID_KEY, String.valueOf(ConfigUtils.getPid()));
+        }
+
+        if (!isGeneric()) {
+            String revision = Version.getVersion(interfaceClass, version);
+            if (revision != null && revision.length() > 0) {
+                map.put("revision", revision);
+            }
+
+            String[] methods = Wrapper.getWrapper(interfaceClass).getMethodNames();
+
+            if (methods.length == 0) {
+                logger.warn("NO method found in service interface " + interfaceClass.getName());
+                map.put("methods", Constants.ANY_VALUE);
+            } else {
+                map.put("methods",StringUtils.join(new HashSet<String>(Arrays.asList(methods)), ",") );
+            }
+        }
+
+        map.put(Constants.INTERFACE_KEY,interfaceName );
+
+
+        appendParameters(map, application );
+        appendParameters(map, module);
+        appendParameters(map, consumer, Constants.DEFAULT_KEY);
+        appendParameters(map, this);
+
+        String prefix = StringUtils.getServiceKey(map);
+
+        if (methods != null && !methods.isEmpty()) {
+            for (MethodConfig methodConfig : methods) {
+                appendParameters(map, methodConfig, methodConfig.getName() );
+
+                String retryKey = methodConfig.getName() + ".retry";
+                if (map.containsKey(retryKey)) {
+                    String retryValue = map.remove(retryKey);
+                    if ("false".equals(retryValue)) {
+                        map.put(methodConfig.getName() + ".retrys", "0");
+                    }
+                }
+                appAttributes(attributes,methodConfig ,prefix + "." + methodConfig.getName() );
+                checkAndConvertImplicitConfig(methodConfig, map, attributes);
+            }
+        }
+
+        String hostToRegistry = ConfigUtils.getSystemProperty(Constants.DUBBO_IP_TO_REGISTRY);
+
+        if (hostToRegistry == null || hostToRegistry.length() == 0) {
+            hostToRegistry = NetUtils.getLocalHost();
+        } else if (isInvalidLocalHost(hostToRegistry)) {
+            throw new IllegalArgumentException("Specified invalid registry ip from property:" + Constants.DUBBO_IP_TO_REGISTRY + ", value:" + hostToRegistry);
+        }
+
+        map.put(Constants.REGISTER_IP_KEY, hostToRegistry);
+
+        StaticContext.getSystemContext().putAll(attributes);
+
+        ref = createProxy(map);
+
+        ConsumerModel consumerModel = new ConsumerModel(getUniqueServiceName(), this, ref, interfaceClass.getMethods());
+
+        ApplicationModel.initConsumerModel(getUniqueServiceName(),consumerModel );
+
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     /**
@@ -757,7 +960,7 @@ public class ReferenceConfig<T> extends AbstractReferenceConfig {
         this.methods = (List<MethodConfig>) methods;
     }
 
-    public ConsumerConfig getConsumer() {
+    public ConsumerConfig  getConsumer() {
         return consumer;
     }
 

@@ -30,7 +30,7 @@ import org.apache.dubbo.rpc.RpcInvocation;
 /**
  * ConsumerContextInvokerFilter
  */
-@Activate(group = Constants.CONSUMER, order = -10000)
+(group = Constants.CONSUMER, order = -10000)
 public class ConsumerContextFilter extends AbstractPostProcessFilter {
 
     @Override

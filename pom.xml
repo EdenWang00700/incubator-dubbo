@@ -16,8 +16,10 @@
   -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
 
+    <!--声明项目遵循的pom版本模型-->
     <modelVersion>4.0.0</modelVersion>
 
+<!--父项目坐标-->
     <parent>
         <groupId>org.apache</groupId>
         <artifactId>apache</artifactId>
@@ -27,12 +29,21 @@
     <groupId>org.apache.dubbo</groupId>
     <artifactId>dubbo-parent</artifactId>
     <version>2.7.0-SNAPSHOT</version>
+
+    <!--packageing标签标识项目的生产构建类型-->
+    <!--标识这个父项目不像之前的项目那样创建一
+    个JAR 或者一个WAR，它仅仅是一个引用其它Maven 项目的POM。-->
     <packaging>pom</packaging>
 
+    <!--项目名称-->
     <name>${project.artifactId}</name>
+    <!--&lt;!&ndash;项目介绍-->
     <description>The parent project of dubbo</description>
+    <!--地址-->
     <url>https://github.com/apache/incubator-dubbo</url>
+    <!--成立时间-->
     <inceptionYear>2011</inceptionYear>
+    <!--许可证-->
     <licenses>
         <license>
             <name>Apache License, Version 2.0</name>
@@ -41,15 +52,19 @@
         </license>
     </licenses>
 
+    <!--scm标签source control management允许你配置你的代码库, 供maven web站点和其他插件使用-->
     <scm>
         <url>https://github.com/apache/incubator-dubbo</url>
         <connection>scm:git:https://github.com/apache/incubator-dubbo.git</connection>
         <developerConnection>scm:git:https://github.com/apache/incubator-dubbo.git</developerConnection>
       <tag>HEAD</tag>
   </scm>
+    <!--项目邮件列表信息-->
     <mailingLists>
+        <!--项目相关的邮件列表.自动产生的网站引用这些信息-->
         <mailingList>
             <name>Development List</name>
+            <!--订阅邮件的地址或链接,如果是邮件地址,创建文档是, mailto链接会被自动创建-->
             <subscribe>dev-subscribe@dubbo.apache.org</subscribe>
             <unsubscribe>dev-unsubscribe@dubbo.apache.org</unsubscribe>
             <post>dev@dubbo.apache.org</post>
@@ -67,6 +82,7 @@
             <post>issues@dubbo.apache.org</post>
         </mailingList>
     </mailingLists>
+    <!--项目开发者列表-->
     <developers>
         <developer>
             <id>dubbo.io</id>
@@ -80,12 +96,12 @@
         <name>The Apache Software Foundation</name>
         <url>http://www.apache.org/</url>
     </organization>
-
+<!--项目问题管理系统-->
     <issueManagement>
         <system>Github Issues</system>
         <url>https://github.com/apache/incubator-dubbo/issues</url>
     </issueManagement>
-
+<!--项目版本配置配置, 以值替代名称, 可以在整个pom文件中使用, 业可以作为触发条件, 格式<name>value</name>-->
     <properties>
         <!-- Test libs -->
         <junit_version>4.12</junit_version>
@@ -125,6 +141,9 @@
         <rat.skip>true</rat.skip>
     </properties>
 
+    <!--模块,及项目的子项目,被构建成项目的一部分,
+    列出的每个模块元素是指向该模块pom文件的目录的相对路径,
+    通过子项目的<artifactId></artifactId>标识-->
     <modules>
         <module>dubbo-common</module>
         <module>dubbo-container</module>
@@ -146,14 +165,26 @@
         <module>distribution</module>
         <module>dubbo-metrics</module>
     </modules>
-
+<!--继承自该项目的所有子项目的默认依赖, 这部分的依赖信息不会被解析,
+而是当子项目申城一个一个依赖时, 注意这里说的是子项目, 不是子项目的子项目
+, 所以当子项目的子项目要是用依赖时需要在子项目中写dependencyManagement-->
     <dependencyManagement>
         <dependencies>
             <dependency>
                 <groupId>org.apache.dubbo</groupId>
                 <artifactId>dubbo-dependencies-bom</artifactId>
                 <version>2.7.0-SNAPSHOT</version>
+                <!--依赖类型, 默认是jar.通常标识依赖文件的扩展名-->
                 <type>pom</type>
+                <!--依赖范围， 在决定在项目关键中哪些构建会被包括进来-->
+                <!--compile：默认， 用于编译-->
+                <!--provided： 类似编译， 支持JDK或容器提供-->
+                <!--runtime： 在执行是需要使用-->
+                <!--test： 在test时使用-->
+                <!--optional： 当项目自身被依赖时， 标注依赖是否传递， 用于连续时使用 -->
+                <!--import：你可以把dependencyManagement放到单独的专门用来管理依赖的pom中，
+                然后在需要使用依赖的模块中通过import scope依赖，就可以引入dependencyManagement。
+                例如可以写这样一个用于依赖管理的pom。import scope只能用在dependencyManagement里面-->
                 <scope>import</scope>
             </dependency>
         </dependencies>
@@ -186,9 +217,14 @@
         </dependency>
     </dependencies>
 
+    <!--列出所有的项目构建profile, 如果被激活,会修改构建处理-->
     <profiles>
+        <!--根据环境参数或命令行参数激活某个构建处理-->
         <profile>
+            <!--构建配置的唯一标识符, 即用于命令行激活,也用于继承时合并具有相同标识符的profile-->
             <id>java6</id>
+
+            <!--以值替代名称,整个项目中都可以用-->
             <properties>
                 <maven_jar_version>3.0.2</maven_jar_version>
                 <maven_surefire_version>2.19.1</maven_surefire_version>
@@ -198,13 +234,19 @@
                 <maven_javadoc_version>2.10.1</maven_javadoc_version>
             </properties>
         </profile>
+
         <profile>
             <id>test</id>
+            <!--自动触发profile的条件逻辑.activation是profile的开启钥匙-->
             <activation>
+                <!--提供一个文件名,通过检测该文件是否存在来激活profile.missing检查该文件是否存在, 如果不存在则激活profile,
+                 exist用于检测文件是否存在,如果存在则激活profile-->
                 <file>
+                    <exists></exists>
                     <missing>.project</missing>
                 </file>
             </activation>
+            <!--模块,被构建成项目的一部分, 列出每个模块元素是指向该模块目录的相对路径-->
             <modules>
                 <module>dubbo-test</module>
             </modules>
@@ -212,10 +254,15 @@
         <profile>
             <id>hudson</id>
             <build>
+                <!--使用插件列表-->
                 <plugins>
+                    <!--plugin元素包含描述插件所需要的信息-->
                     <plugin>
+                        <!--插件在仓库的groupId -->
                         <groupId>org.apache.maven.plugins</groupId>
+                        <!--插件在仓库的artifactID-->
                         <artifactId>maven-surefire-plugin</artifactId>
+                        <!--作为DOM文件配置-->
                         <configuration>
                             <testFailureIgnore>true</testFailureIgnore>
                         </configuration>
@@ -226,6 +273,7 @@
         <profile>
             <id>java8-vm-args</id>
             <activation>
+                <!--当匹配的讲课被检测到时, profile被激活-->
                 <jdk>[1.8,)</jdk>
             </activation>
             <properties>
@@ -254,7 +302,9 @@
                                 <version>8.9</version>
                             </dependency>
                         </dependencies>
+                        <!--在项目构建生命周期执行的一组目标配置, 每个目标可能有不同的配置-->
                         <executions>
+                            <!--包含插件执行所需要的信息-->
                             <execution>
                                 <id>checkstyle-validation</id>
                                 <phase>validate</phase>
@@ -266,6 +316,7 @@
                                     <consoleOutput>true</consoleOutput>
                                     <failOnViolation>true</failOnViolation>
                                 </configuration>
+                                <!--配置的执行目标-->
                                 <goals>
                                     <goal>check</goal>
                                 </goals>
@@ -277,6 +328,7 @@
         </profile>
         <profile>
             <id>release</id>
+            <!--构建项目需要的信息-->
             <build>
                 <plugins>
                     <plugin>
@@ -322,7 +374,9 @@
 
     <build>
         <!-- Used for packaging NOTICE & LICENSE to each sub-module jar-->
+        <!--项目的所有资源路径-->
         <resources>
+            <!--项目相关资源路径-->
             <resource>
                 <directory>src/main/resources/</directory>
                 <filtering>false</filtering>

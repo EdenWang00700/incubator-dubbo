@@ -280,7 +280,7 @@ public abstract class AbstractInterfaceConfig extends AbstractMethodConfig {
                     List<URL> urls = UrlUtils.parseURLs(address, map);
                     for (URL url : urls) {
                         url = url.addParameter(Constants.REGISTER_KEY, url.getProtocol());
-                        url = url.addParameter(Constants.REGISTRY_PROTOCOL, true);
+                        url = url.setProtocol(Constants.REGISTRY_PROTOCOL);
                         if ((provider && url.getParameter(Constants.REGISTER_KEY, true)) || (!provider && url.getParameter(Constants.SUBSCRIBE_KEY, true))) {
                             /**
                              * 方法的核心, 之前做的就是为了得到registryList
@@ -296,6 +296,52 @@ public abstract class AbstractInterfaceConfig extends AbstractMethodConfig {
         return registryList;
     }
 
+    protected List<URL> loadRegistries2(boolean provider) {
+        checkRegistry();
+        List<URL> registryUrlList = new ArrayList<URL>();
+        if (registries != null && !registries.isEmpty()) {
+            for (RegistryConfig registryConfig : registries) {
+                String address = registryConfig.getAddress();
+                if (address == null || address.length() == 0) {
+                    address = Constants.ANYHOST_VALUE;
+                }
+
+                String sysaddress = System.getProperty("dubbo.registry.address");
+                if (sysaddress != null && sysaddress.length()>0) {
+                    address = sysaddress;
+                }
+
+                if (address != null && address.length() > 0 && !RegistryConfig.NO_AVAILABLE.equalsIgnoreCase(address)) {
+                    Map<String, String> map = new HashMap<>();
+                    appendParameters(map, application);
+                    appendParameters(map, registryConfig);
+                    map.put("path", RegistryService.class.getName());
+                    map.put("dubbo",Version.getVersion());
+                    map.put(Constants.TIMESTAMP_KEY, String.valueOf(System.currentTimeMillis()));
+                    if (ConfigUtils.getPid() > 0) {
+                        map.put(Constants.PID_KEY, String.valueOf(ConfigUtils.getPid()));
+                    }
+                    if (!map.containsKey("protocal")) {
+                        if (ExtensionLoader.getExtensionLoader(RegistryFactory.class).hasExtension("remote")) {
+                           map.put("protocol", "remote");
+                        } else {
+                            map.put("protocol", "dubbo");
+                        }
+                    }
+
+                    List<URL> urls = UrlUtils.parseURLs(address, map);
+                    for (URL url : urls) {
+                        url = url.addParameter(Constants.REGISTER_KEY, true);
+                        url = url.setProtocol(Constants.REGISTRY_PROTOCOL);
+                        if ((provider && url.getParameter(Constants.SUBSCRIBE_KEY,true))) {
+                            registryUrlList.add(url);
+                        }
+                    }
+                }
+            }
+        }
+        return registryUrlList;
+    }
 
     protected List<URL> loadRegistries(boolean provider) {
         checkRegistry();

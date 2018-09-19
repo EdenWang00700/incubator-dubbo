@@ -21,7 +21,7 @@ import org.apache.dubbo.common.extension.SPI;
 /**
  * ExporterListener. (SPI, Singleton, ThreadSafe)
  */
-@SPI
+
 public interface ExporterListener {
 
     /**

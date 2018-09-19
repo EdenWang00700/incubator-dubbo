@@ -76,7 +76,8 @@ public interface MonitorService {
     /**
      * Lookup monitor data
      * 1. support lookup by day: count://host/interface?application=foo&method=foo&side=provider&view=chart&date=2012-07-03
-     * 1.1 host,application,interface,group,version,method: query criteria for looking up by host, application, interface, method. When one criterion is not present, it means ALL will be accepted, but 0.0.0.0 is ALL for host
+     * 1.1 host,application,interface,group,version,method: query criteria for looking up by host, application, interface, method.
+     * When one criterion is not present, it means ALL will be accepted, but 0.0.0.0 is ALL for host
      * 1.2 side=consumer,provider: decide the data from which side, both provider and consumer are returned by default
      * 1.3 default value is view=summary, to return the summarized data for the whole day. view=chart will return the URL address showing the whole day trend which is convenient for embedding in other web page
      * 1.4 date=2012-07-03: specify the date to collect the data, today is the default value

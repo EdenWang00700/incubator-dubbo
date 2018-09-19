@@ -29,11 +29,11 @@ import java.lang.annotation.Target;
  * for examples: <code>@Activate</code> can be used to load certain <code>Filter</code> extension when there are
  * multiple implementations.
  * <ol>
- * <li>{@link Activate#group()} specifies group criteria. Framework SPI defines the valid group values.
- * <li>{@link Activate#value()} specifies parameter key in {@link URL} criteria.
+ * <li>{@link Activate#group()} specifies group criteria. Framework SPI defines the valid group values.@SPI会定义Activate的group比如:@SPI("dubbo")
+ * <li>{@link Activate#value()} specifies parameter key in {@link URL} criteria.value从URL中的parameter中取值
  * </ol>
  * SPI provider can call {@link ExtensionLoader#getActivateExtension(URL, String, String)} to find out all activated
- * extensions with the given criteria.
+ * extensions with the given criteria.SPI提供者可以可以通过Extension的这个方法获得通过所给条件判断激活的扩展点.
  *
  * @see SPI
  * @see URL
